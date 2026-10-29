@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#12202f" />
+    <meta
+      name="description"
+      content="PrivateScan Web — browser document scanner. Process on-device, download a PDF. No App Store."
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PrivateScan" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Source+Sans+3:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>PrivateScan Web</title>
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <p class="brand-name">PrivateScan</p>
+            <p class="brand-sub">Web · on-device PDF</p>
+          </div>
+        </div>
+        <button type="button" id="installBtn" class="ghost-btn" hidden>
+          Install
+        </button>
+      </header>
+
+      <main class="stage">
+        <section id="emptyState" class="hero">
+          <h1>Scan in the browser.</h1>
+          <p>
+            Capture or upload a photo, drag the frame corners onto the page
+            edges, then flatten and download a PDF. Processing stays on this
+            device — nothing is uploaded to a server.
+          </p>
+          <div class="cta-row">
+            <button type="button" id="cameraBtn" class="primary-btn">
+              Use camera
+            </button>
+            <label class="secondary-btn file-label">
+              Upload images
+              <input
+                id="fileInput"
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+              />
+            </label>
+          </div>
+          <p class="hint">
+            Tip on iPhone: Safari → Share → Add to Home Screen for the PWA.
+          </p>
+        </section>
+
+        <section id="workspace" class="workspace" hidden>
+          <div class="toolbar">
+            <div class="field">
+              <label for="modeSelect">Colour</label>
+              <select id="modeSelect">
+                <option value="original">Original</option>
+                <option value="greyscale">Greyscale</option>
+                <option value="bw">Black &amp; white</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="qualitySelect">PDF quality</label>
+              <select id="qualitySelect">
+                <option value="high">High</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="compact">Compact</option>
+              </select>
+            </div>
+            <div class="field grow">
+              <label for="filenameInput">Filename</label>
+              <input
+                id="filenameInput"
+                type="text"
+                value="PrivateScan"
+                maxlength="80"
+                autocomplete="off"
+              />
+            </div>
+          </div>
+
+          <div id="pageList" class="page-list" aria-live="polite"></div>
+
+          <div class="actions">
+            <button type="button" id="addCameraBtn" class="secondary-btn">
+              Add page (camera)
+            </button>
+            <label class="secondary-btn file-label">
+              Add images
+              <input
+                id="addFileInput"
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+              />
+            </label>
+            <button type="button" id="clearBtn" class="ghost-btn danger">
+              Clear all
+            </button>
+            <button type="button" id="exportBtn" class="primary-btn">
+              Download PDF
+            </button>
+          </div>
+          <p id="status" class="status" role="status"></p>
+          <div id="saveRow" class="save-row" hidden>
+            <a id="saveLink" class="primary-btn save-link" download="PrivateScan.pdf"
+              >Save PDF to disk</a
+            >
+            <a id="openLink" class="secondary-btn save-link" target="_blank" rel="noopener"
+              >Open PDF</a
+            >
+            <button type="button" id="shareBtn" class="secondary-btn" hidden>
+              Share…
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="foot">
+        <p>
+          Demo of a GitHub Pages / PWA path. Edge frame is manual (drag
+          corners); native VisionKit auto-detect is still stronger.
+        </p>
+      </footer>
+    </div>
+
+    <canvas id="workCanvas" hidden></canvas>
+
+    <dialog id="cameraDialog" class="camera-dialog">
+      <div class="camera-frame">
+        <video id="liveVideo" playsinline autoplay muted></video>
+        <div class="camera-bar">
+          <button type="button" id="closeCameraBtn" class="ghost-btn">
+            Cancel
+          </button>
+          <button type="button" id="shutterBtn" class="primary-btn">
+            Capture
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="cropDialog" class="crop-dialog">
+      <div class="crop-shell">
+        <header class="crop-header">
+          <div>
+            <p class="crop-title">Adjust page edges</p>
+            <p class="crop-hint">
+              Drag each corner onto the document. Apply flattens the page.
+            </p>
+          </div>
+        </header>
+        <div class="crop-stage" id="cropStage">
+          <div class="crop-frame" id="cropFrame">
+            <img id="cropImage" alt="Page to crop" draggable="false" />
+            <svg id="cropOverlay" class="crop-overlay" aria-hidden="true">
+              <polygon id="cropPoly" class="crop-poly"></polygon>
+              <circle data-corner="0" class="crop-handle" r="14"></circle>
+              <circle data-corner="1" class="crop-handle" r="14"></circle>
+              <circle data-corner="2" class="crop-handle" r="14"></circle>
+              <circle data-corner="3" class="crop-handle" r="14"></circle>
+            </svg>
+            <canvas
+              id="cropLoupe"
+              class="crop-loupe"
+              width="128"
+              height="128"
+              hidden
+              aria-hidden="true"
+            ></canvas>
+          </div>
+        </div>
+        <div class="camera-bar crop-bar">
+          <button type="button" id="cropCancelBtn" class="ghost-btn">
+            Cancel
+          </button>
+          <button type="button" id="cropResetBtn" class="secondary-btn">
+            Reset frame
+          </button>
+          <button type="button" id="cropApplyBtn" class="primary-btn">
+            Apply &amp; flatten
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
