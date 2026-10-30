@@ -8,15 +8,33 @@ const QUALITY = {
 
 /**
  * @typedef {{ x: number, y: number }} Point
+ * @typedef {'original' | 'greyscale' | 'bw' | 'cleanup'} ProcessMode
  * @typedef {{
  *   id: string,
  *   rotation: number,
  *   sourceUrl: string,
  *   objectUrl: string,
+ *   displayUrl: string,
+ *   mode: ProcessMode,
  *   flattened: boolean,
  *   corners: Point[] | null,
  * }} Page
  */
+
+const PROCESS_MODES = [
+  { value: "original", label: "Original", title: "No filter — keep the photo as captured" },
+  { value: "greyscale", label: "Greyscale", title: "Convert to greyscale" },
+  {
+    value: "bw",
+    label: "Black & white",
+    title: "High-contrast document black & white",
+  },
+  {
+    value: "cleanup",
+    label: "Clean paper",
+    title: "Whitish background, darker text (heuristic scanner cleanup)",
+  },
+];
 
 /** @type {Page[]} */
 let pages = [];
@@ -33,11 +51,12 @@ let cropCorners = [];
 let dragCorner = -1;
 /** Hovered corner for desktop loupe preview (-1 = none). */
 let hoverCorner = -1;
+/** True while the active loupe drag/hover is from touch/pen (larger finger occlusion). */
+let loupeIsTouch = false;
 let imageNatural = { w: 1, h: 1 };
 
 const LOUPE_SIZE = 128;
 const LOUPE_ZOOM = 3;
-const LOUPE_GAP = 36;
 
 const els = {
   emptyState: document.getElementById("emptyState"),
@@ -102,10 +121,24 @@ function revokeUrl(url) {
 }
 
 function revokePage(page) {
+  if (page.displayUrl && page.displayUrl !== page.objectUrl && page.displayUrl !== page.sourceUrl) {
+    revokeUrl(page.displayUrl);
+  }
   if (page.objectUrl && page.objectUrl !== page.sourceUrl) {
     revokeUrl(page.objectUrl);
   }
   revokeUrl(page.sourceUrl);
+}
+
+function revokeDisplayOnly(page) {
+  if (
+    page.displayUrl &&
+    page.displayUrl !== page.objectUrl &&
+    page.displayUrl !== page.sourceUrl
+  ) {
+    revokeUrl(page.displayUrl);
+  }
+  page.displayUrl = page.objectUrl;
 }
 
 function defaultCorners(w, h) {
@@ -125,8 +158,17 @@ function dist(a, b) {
   return Math.hypot(dx, dy);
 }
 
+function defaultProcessMode() {
+  const v = els.modeSelect?.value;
+  if (v === "greyscale" || v === "bw" || v === "cleanup" || v === "original") {
+    return v;
+  }
+  return "original";
+}
+
 function addImageBlobs(blobs, { openCrop = true } = {}) {
   const newIds = [];
+  const mode = defaultProcessMode();
   for (const blob of blobs) {
     const sourceUrl = URL.createObjectURL(blob);
     const page = {
@@ -134,6 +176,8 @@ function addImageBlobs(blobs, { openCrop = true } = {}) {
       rotation: 0,
       sourceUrl,
       objectUrl: sourceUrl,
+      displayUrl: sourceUrl,
+      mode,
       flattened: false,
       corners: null,
     };
@@ -165,7 +209,7 @@ function renderPages() {
     card.style.animationDelay = `${Math.min(index, 8) * 40}ms`;
 
     const img = document.createElement("img");
-    img.src = page.objectUrl;
+    img.src = page.displayUrl || page.objectUrl;
     img.alt = `Page ${index + 1}`;
     img.style.transform = `rotate(${page.rotation}deg)`;
 
@@ -208,10 +252,115 @@ function renderPages() {
       })
     );
 
+    const processRow = document.createElement("div");
+    processRow.className = "page-process";
+    const processLabel = document.createElement("label");
+    processLabel.className = "page-process-label";
+    const selectId = `pageMode-${page.id}`;
+    processLabel.htmlFor = selectId;
+    processLabel.textContent = "Processing";
+    const processSelect = document.createElement("select");
+    processSelect.id = selectId;
+    processSelect.className = "page-mode-select";
+    processSelect.setAttribute("aria-label", `Processing for page ${index + 1}`);
+    for (const opt of PROCESS_MODES) {
+      const option = document.createElement("option");
+      option.value = opt.value;
+      option.textContent = opt.label;
+      if (opt.title) option.title = opt.title;
+      if (opt.value === page.mode) option.selected = true;
+      processSelect.append(option);
+    }
+    processSelect.addEventListener("change", () => {
+      void setPageMode(page.id, /** @type {ProcessMode} */ (processSelect.value));
+    });
+    processRow.append(processLabel, processSelect);
+
     meta.append(label, controls);
-    card.append(img, meta);
+    card.append(img, meta, processRow);
     els.pageList.append(card);
   });
+}
+
+/**
+ * Apply processing mode and refresh the on-card preview (on-device canvas).
+ * @param {string} pageId
+ * @param {ProcessMode} mode
+ */
+async function setPageMode(pageId, mode) {
+  const page = pages.find((p) => p.id === pageId);
+  if (!page) return;
+  page.mode = mode;
+  setStatus(
+    mode === "original"
+      ? "Showing original (no filter)."
+      : `Applying “${PROCESS_MODES.find((m) => m.value === mode)?.label || mode}”…`
+  );
+  try {
+    await refreshPagePreview(page);
+    renderPages();
+    setStatus(
+      mode === "original"
+        ? "Page uses original colours — filtration optional."
+        : `Page preview updated · ${PROCESS_MODES.find((m) => m.value === mode)?.label}.`
+    );
+  } catch (err) {
+    console.error(err);
+    setStatus("Could not update page preview.");
+  }
+}
+
+async function applyModeToAllPages(mode) {
+  for (const page of pages) {
+    page.mode = mode;
+  }
+  setStatus("Updating page previews…");
+  try {
+    await Promise.all(pages.map((p) => refreshPagePreview(p)));
+    renderPages();
+    setStatus(
+      mode === "original"
+        ? "All pages set to Original (no filter)."
+        : `All pages set to ${PROCESS_MODES.find((m) => m.value === mode)?.label || mode}.`
+    );
+  } catch (err) {
+    console.error(err);
+    setStatus("Could not update all previews.");
+    renderPages();
+  }
+}
+
+/**
+ * Build filtered preview blob from the unfiltered objectUrl.
+ * @param {Page} page
+ */
+async function refreshPagePreview(page) {
+  revokeDisplayOnly(page);
+  if (!page.mode || page.mode === "original") {
+    page.displayUrl = page.objectUrl;
+    return;
+  }
+  const img = await loadImage(page.objectUrl);
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (!w || !h) {
+    page.displayUrl = page.objectUrl;
+    return;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  applyMode(ctx, w, h, page.mode);
+  const blob = await new Promise((resolve, reject) =>
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("Preview encode failed"))),
+      "image/jpeg",
+      0.88
+    )
+  );
+  page.displayUrl = URL.createObjectURL(blob);
 }
 
 function movePage(index, delta) {
@@ -237,6 +386,7 @@ async function openCropEditor(pageId) {
   cropPage = page;
   dragCorner = -1;
   hoverCorner = -1;
+  loupeIsTouch = false;
   hideCropLoupe();
   const img = await loadImage(page.sourceUrl);
   imageNatural = { w: img.naturalWidth, h: img.naturalHeight };
@@ -303,10 +453,14 @@ function drawCropOverlay() {
     "points",
     points.map((p) => `${p.x},${p.y}`).join(" ")
   );
+  const activeIdx = dragCorner >= 0 ? dragCorner : -1;
   const handles = els.cropOverlay.querySelectorAll(".crop-handle");
   handles.forEach((handle, i) => {
     handle.setAttribute("cx", String(points[i].x));
     handle.setAttribute("cy", String(points[i].y));
+    // Dim the handle under the finger so the loupe (not the knob) is the focus.
+    handle.classList.toggle("is-occluded", activeIdx === i && loupeIsTouch);
+    handle.classList.toggle("is-active", activeIdx === i);
   });
   refreshCropLoupe();
 }
@@ -314,45 +468,36 @@ function drawCropOverlay() {
 function hideCropLoupe() {
   if (!els.cropLoupe) return;
   els.cropLoupe.hidden = true;
+  els.cropLoupe.classList.remove("is-touch");
 }
 
 /**
- * Prefer placing the loupe opposite the finger/cursor so the handle stays visible.
- * Falls back to whichever side has room inside the crop frame.
+ * Lock loupe to the opposite quadrant of the crop frame from the active corner.
+ * Never centers on the touch/pointer — finger occlusion stays on the handle.
+ * Position is stable for the whole drag (only loupe content tracks the corner).
  */
-function loupeOffsetForCorner(cornerIdx, displayPt, frameW, frameH) {
+function loupeOffsetForCorner(cornerIdx, frameW, frameH, isTouch) {
   const size = LOUPE_SIZE;
-  const gap = LOUPE_GAP;
-  const candidates = [
-    { x: displayPt.x - size / 2, y: displayPt.y - size - gap }, // above
-    { x: displayPt.x - size / 2, y: displayPt.y + gap }, // below
-    { x: displayPt.x + gap, y: displayPt.y - size / 2 }, // right
-    { x: displayPt.x - size - gap, y: displayPt.y - size / 2 }, // left
+  // Touch needs more inset from edges / system chrome; mouse can sit tighter.
+  const pad = isTouch ? 18 : 10;
+  // Keep the loupe fully inside the crop frame when the stage is large enough.
+  const maxX = Math.max(0, frameW - size);
+  const maxY = Math.max(0, frameH - size);
+  const left = Math.min(pad, maxX);
+  const top = Math.min(pad, maxY);
+  const right = Math.max(0, maxX - Math.min(pad, maxX));
+  const bottom = Math.max(0, maxY - Math.min(pad, maxY));
+  // Corner → opposite stage quadrant: TL→BR, TR→BL, BR→TL, BL→TR
+  const anchors = [
+    { x: right, y: bottom },
+    { x: left, y: bottom },
+    { x: left, y: top },
+    { x: right, y: top },
   ];
-  // Bias by corner: TL prefer right/below, TR left/below, BR left/above, BL right/above
-  const preferred = [
-    [2, 1, 0, 3],
-    [3, 1, 0, 2],
-    [3, 0, 1, 2],
-    [2, 0, 1, 3],
-  ][cornerIdx] || [0, 1, 2, 3];
-
-  const margin = 4;
-  for (const i of preferred) {
-    const c = candidates[i];
-    if (
-      c.x >= margin &&
-      c.y >= margin &&
-      c.x + size <= frameW - margin &&
-      c.y + size <= frameH - margin
-    ) {
-      return c;
-    }
-  }
-
+  const chosen = anchors[cornerIdx] || { x: left, y: top };
   return {
-    x: Math.max(margin, Math.min(frameW - size - margin, displayPt.x - size / 2)),
-    y: Math.max(margin, Math.min(frameH - size - margin, displayPt.y - size - gap)),
+    x: Math.max(0, Math.min(maxX, chosen.x)),
+    y: Math.max(0, Math.min(maxY, chosen.y)),
   };
 }
 
@@ -409,10 +554,10 @@ function drawCropLoupeContent(corner) {
   ctx.arc(size / 2, size / 2, 2.75, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = "rgba(126, 200, 214, 0.55)";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(126, 200, 214, 0.95)";
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size / 2 - 1.5, 0, Math.PI * 2);
+  ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
   ctx.stroke();
 
   ctx.restore();
@@ -430,11 +575,16 @@ function refreshCropLoupe() {
   }
 
   const corner = cropCorners[cornerIdx];
-  const display = imageToDisplay(corner);
   const frame = els.cropFrame.getBoundingClientRect();
-  const pos = loupeOffsetForCorner(cornerIdx, display, frame.width, frame.height);
+  const pos = loupeOffsetForCorner(
+    cornerIdx,
+    frame.width,
+    frame.height,
+    loupeIsTouch
+  );
 
   drawCropLoupeContent(corner);
+  els.cropLoupe.classList.toggle("is-touch", loupeIsTouch);
   els.cropLoupe.style.transform = `translate(${pos.x}px, ${pos.y}px)`;
   els.cropLoupe.hidden = false;
 }
@@ -454,12 +604,13 @@ function onCropPointerDown(event) {
   event.preventDefault();
   dragCorner = Number(handle.getAttribute("data-corner"));
   hoverCorner = dragCorner;
+  loupeIsTouch = event.pointerType === "touch" || event.pointerType === "pen";
   try {
     handle.setPointerCapture?.(event.pointerId);
   } catch {
     /* ignore capture failures on older browsers */
   }
-  refreshCropLoupe();
+  drawCropOverlay();
 }
 
 function onCropPointerMove(event) {
@@ -475,6 +626,7 @@ function onCropPointerMove(event) {
 
   // Desktop hover preview while not dragging.
   if (event.pointerType === "mouse" && els.cropDialog.open) {
+    loupeIsTouch = false;
     const target = event.target;
     const handle =
       target instanceof Element ? target.closest(".crop-handle") : null;
@@ -492,21 +644,25 @@ function onCropPointerUp(event) {
   dragCorner = -1;
   if (event?.pointerType === "touch" || event?.pointerType === "pen") {
     hoverCorner = -1;
+    loupeIsTouch = false;
   } else if (event?.pointerType === "mouse") {
+    loupeIsTouch = false;
     const target = event.target;
     const handle =
       target instanceof Element ? target.closest(".crop-handle") : null;
     hoverCorner = handle ? Number(handle.getAttribute("data-corner")) : -1;
   } else {
     hoverCorner = -1;
+    loupeIsTouch = false;
   }
-  refreshCropLoupe();
+  drawCropOverlay();
 }
 
 function closeCropEditor({ advance = true } = {}) {
   cropPage = null;
   dragCorner = -1;
   hoverCorner = -1;
+  loupeIsTouch = false;
   hideCropLoupe();
   if (els.cropDialog.open) els.cropDialog.close();
   if (advance) pumpCropQueue();
@@ -713,17 +869,20 @@ async function applyCrop() {
       cropCorners,
       quality.maxEdge
     );
+    revokeDisplayOnly(cropPage);
     if (cropPage.objectUrl !== cropPage.sourceUrl) {
       revokeUrl(cropPage.objectUrl);
     }
     cropPage.objectUrl = URL.createObjectURL(blob);
+    cropPage.displayUrl = cropPage.objectUrl;
     cropPage.corners = corners;
     cropCorners = corners.map((c) => ({ ...c }));
     cropPage.flattened = true;
     cropPage.rotation = 0;
+    await refreshPagePreview(cropPage);
     syncView();
     setStatus(
-      `Page flattened to ${outW}×${outH}px. Adjust again anytime with ▦.`
+      `Page flattened to ${outW}×${outH}px. Choose processing on the card, or adjust edges with ▦.`
     );
     closeCropEditor({ advance: true });
   } catch (err) {
@@ -812,10 +971,24 @@ function loadImage(url) {
   });
 }
 
+/**
+ * On-device pixel filters for digitalization. No external deps.
+ * - original: no-op
+ * - greyscale: luminance
+ * - bw: document-style soft threshold / contrast
+ * - cleanup: whitish paper + darker text (global paper estimate + stretch)
+ */
 function applyMode(ctx, width, height, mode) {
-  if (mode === "original") return;
+  if (!mode || mode === "original") return;
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
+
+  if (mode === "cleanup") {
+    applyCleanupPaper(data);
+    ctx.putImageData(imageData, 0, 0);
+    return;
+  }
+
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i + 1];
@@ -828,6 +1001,44 @@ function applyMode(ctx, width, height, mode) {
     data[i] = data[i + 1] = data[i + 2] = gray;
   }
   ctx.putImageData(imageData, 0, 0);
+}
+
+/**
+ * Practical “scanner” cleanup: estimate paper white from bright pixels,
+ * stretch luminance so paper → near-white and ink stays darker.
+ * Heuristic only — uneven lighting / coloured paper / photos may suffer.
+ * @param {Uint8ClampedArray} data
+ */
+function applyCleanupPaper(data) {
+  const n = data.length / 4;
+  /** @type {number[]} */
+  const samples = [];
+  const step = Math.max(1, Math.floor(n / 4000));
+  for (let p = 0; p < n; p += step) {
+    const i = p * 4;
+    samples.push(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+  }
+  samples.sort((a, b) => a - b);
+  const pct = (t) => samples[Math.min(samples.length - 1, Math.floor(samples.length * t))] ?? 200;
+  // Bright end ≈ paper; darkish percentile ≈ ink floor for stretch.
+  const paper = Math.max(pct(0.92), 160);
+  const ink = Math.min(pct(0.12), paper - 40);
+  const span = Math.max(paper - ink, 24);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    // Map [ink, paper] → [0, 255], then crush near-white and deepen mid/dark.
+    let v = ((gray - ink) / span) * 255;
+    v = Math.max(0, Math.min(255, v));
+    // Soft S-curve for readable text without full binary posterize.
+    const t = v / 255;
+    const contrasted = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    v = contrasted * 255;
+    if (v > 228) v = 255;
+    else if (v < 28) v = 0;
+    else v = Math.max(0, Math.min(255, (v - 28) * (255 / 200)));
+    data[i] = data[i + 1] = data[i + 2] = v;
+  }
 }
 
 async function renderPageForPdf(page, mode, maxEdge, jpegQuality) {
@@ -988,7 +1199,6 @@ async function exportPdf() {
   els.saveRow.hidden = true;
   setStatus("Building PDF…");
   try {
-    const mode = els.modeSelect.value;
     const quality = QUALITY[els.qualitySelect.value] || QUALITY.balanced;
     const pdf = await PDFDocument.create();
     pdf.setProducer("PrivateScan Web");
@@ -996,10 +1206,11 @@ async function exportPdf() {
 
     let lastDims = "";
     for (let i = 0; i < pages.length; i += 1) {
+      const pageMode = pages[i].mode || "original";
       setStatus(`Processing page ${i + 1} of ${pages.length}…`);
       const { bytes, width, height, srcW, srcH } = await renderPageForPdf(
         pages[i],
-        mode,
+        pageMode,
         quality.maxEdge,
         quality.jpeg
       );
@@ -1090,6 +1301,19 @@ els.clearBtn.addEventListener("click", clearAll);
 els.exportBtn.addEventListener("click", exportPdf);
 els.shareBtn.addEventListener("click", shareLastPdf);
 
+els.modeSelect.addEventListener("change", () => {
+  const mode = /** @type {ProcessMode} */ (els.modeSelect.value);
+  if (!pages.length) {
+    setStatus(
+      mode === "original"
+        ? "New pages will keep original colours (filtration optional)."
+        : `New pages will default to ${PROCESS_MODES.find((m) => m.value === mode)?.label}.`
+    );
+    return;
+  }
+  void applyModeToAllPages(mode);
+});
+
 els.cropApplyBtn.addEventListener("click", applyCrop);
 els.cropResetBtn.addEventListener("click", () => {
   cropCorners = defaultCorners(imageNatural.w, imageNatural.h);
@@ -1107,6 +1331,7 @@ els.cropDialog.addEventListener("cancel", (e) => {
 els.cropOverlay.addEventListener("pointerdown", onCropPointerDown);
 els.cropOverlay.addEventListener("pointerover", (event) => {
   if (dragCorner >= 0 || event.pointerType !== "mouse") return;
+  loupeIsTouch = false;
   const target = event.target;
   if (!(target instanceof Element)) return;
   const handle = target.closest(".crop-handle");

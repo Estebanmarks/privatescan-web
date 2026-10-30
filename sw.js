@@ -1,4 +1,4 @@
-const CACHE = "privatescan-web-v5";
+const CACHE = "privatescan-web-v6";
 const ASSETS = [
   "./",
   "./index.html",

@@ -72,11 +72,14 @@
         <section id="workspace" class="workspace" hidden>
           <div class="toolbar">
             <div class="field">
-              <label for="modeSelect">Colour</label>
-              <select id="modeSelect">
-                <option value="original">Original</option>
+              <label for="modeSelect">Processing (all pages)</label>
+              <select id="modeSelect" title="Applies to every page; each card can still override">
+                <option value="original" selected>Original (no filter)</option>
                 <option value="greyscale">Greyscale</option>
                 <option value="bw">Black &amp; white</option>
+                <option value="cleanup" title="Whitish paper, darker text">
+                  Clean paper
+                </option>
               </select>
             </div>
             <div class="field">
@@ -98,6 +101,10 @@
               />
             </div>
           </div>
+          <p class="process-hint">
+            Filtration is optional. Pick a mode per page after flatten — PDF
+            export uses each page’s choice (on-device only).
+          </p>
 
           <div id="pageList" class="page-list" aria-live="polite"></div>
 

@@ -246,12 +246,44 @@ input[type="text"] {
   align-items: center;
   justify-content: space-between;
   gap: 0.35rem;
-  padding: 0.55rem 0.65rem 0.7rem;
+  padding: 0.55rem 0.65rem 0.35rem;
 }
 
 .page-meta span {
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+.process-hint {
+  margin: -0.35rem 0 1rem;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.page-process {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0 0.65rem 0.75rem;
+}
+
+.page-process-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+}
+
+.page-mode-select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  background: rgba(255, 252, 247, 0.95);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
 }
 
 .page-controls {
@@ -443,6 +475,15 @@ a.save-link {
   cursor: grabbing;
 }
 
+.crop-handle.is-active {
+  stroke: #7ec8d6;
+}
+
+.crop-handle.is-occluded {
+  opacity: 0.22;
+  stroke-width: 2;
+}
+
 .crop-loupe {
   position: absolute;
   left: 0;
@@ -452,12 +493,18 @@ a.save-link {
   border-radius: 50%;
   pointer-events: none;
   z-index: 6;
-  border: 2.5px solid #7ec8d6;
+  border: 3.5px solid #9ad7e2;
   box-shadow:
-    0 8px 22px rgba(0, 0, 0, 0.55),
-    inset 0 0 0 1px rgba(243, 240, 234, 0.22);
+    0 10px 28px rgba(0, 0, 0, 0.62),
+    0 0 0 2px rgba(13, 22, 32, 0.85),
+    inset 0 0 0 1px rgba(243, 240, 234, 0.28);
   background: #05090e;
   image-rendering: auto;
+}
+
+.crop-loupe.is-touch {
+  border-width: 4px;
+  border-color: #b7e6ef;
 }
 
 .crop-bar {
